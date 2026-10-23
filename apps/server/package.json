@@ -1,0 +1,6 @@
+{
+  "name": "@wbw/server",
+  "private": true,
+  "type": "module",
+  "description": "Reserved for Phase 3 authoritative multiplayer; no server is required for practice."
+}
