@@ -1,136 +1,212 @@
-import { useEffect, useMemo, useRef } from "react";
+import {
+  Component,
+  Suspense,
+  useEffect,
+  useMemo,
+  useRef,
+  type ReactNode,
+} from "react";
 import { useFrame } from "@react-three/fiber";
+import { useGLTF } from "@react-three/drei";
 import * as THREE from "three";
-import { WEAPON_SOCKET } from "@wbw/shared";
 import { match, useGame } from "../runtime";
+import { ProceduralCharacter } from "./ProceduralCharacter";
+import { createOfficialRig } from "./official";
 import { animateCharacter, createAnimationState } from "./animation";
-import { createCharacterRig } from "./model";
-/** Public asset adapter. Gameplay knows only a fighter and a muzzle socket, never mesh names. */
-export function Character({
-  index,
-  display = false,
-}: {
-  index: number;
-  display?: boolean;
-}) {
-  const rig = useMemo(() => createCharacterRig(index), [index]);
-  const pose = useMemo(createAnimationState, [rig]);
-  const animationTime = useRef(0);
+type Props = { index: number; display?: boolean };
+class AssetBoundary extends Component<
+  { children: ReactNode; fallback: ReactNode },
+  { failed: boolean }
+> {
+  state = { failed: false };
+  static getDerivedStateFromError() {
+    return { failed: true };
+  }
+  render() {
+    return this.state.failed ? this.props.fallback : this.props.children;
+  }
+}
+/** Official assets are optional at load time; practice always has a playable procedural fallback. */
+export function Character(props: Props) {
+  const fallback = <ProceduralCharacter {...props} />;
+  return (
+    <AssetBoundary fallback={fallback}>
+      <Suspense fallback={fallback}>
+        <OfficialCharacter {...props} />
+      </Suspense>
+    </AssetBoundary>
+  );
+}
+function OfficialCharacter({ index, display = false }: Props) {
+  const character = useGLTF("/assets/aqua-blaster-kid.glb"),
+    blaster = useGLTF("/assets/hydrocore-blaster.glb");
+  const rig = useMemo(
+    () =>
+      createOfficialRig(
+        character.scene,
+        blaster.scene,
+        character.animations,
+        index,
+      ),
+    [character, blaster, index],
+  );
+  const pose = useMemo(createAnimationState, [rig]),
+    time = useRef(0);
   const scratch = useMemo(
     () => ({
-      shoulder: new THREE.Vector3(),
-      hand: new THREE.Vector3(),
+      a: new THREE.Vector3(),
+      b: new THREE.Vector3(),
+      c: new THREE.Vector3(),
+      goal: new THREE.Vector3(),
       elbow: new THREE.Vector3(),
       direction: new THREE.Vector3(),
       bend: new THREE.Vector3(),
-      axis: new THREE.Vector3(0, 1, 0),
-      segment: new THREE.Vector3(),
+      v: new THREE.Vector3(),
+      u: new THREE.Vector3(),
+      q: new THREE.Quaternion(),
+      world: new THREE.Quaternion(),
+      parent: new THREE.Quaternion(),
+      rotation: new THREE.Quaternion(),
+      euler: new THREE.Euler(),
     }),
     [],
   );
   useEffect(() => () => rig.dispose(), [rig]);
   useFrame((_, delta) => {
     const p = match.players[index],
-      state = useGame.getState();
-    if (!state.paused || display) animationTime.current += Math.min(delta, 0.1);
-    const t = animationTime.current;
+      state = useGame.getState(),
+      dt = state.paused && !display ? 0 : Math.min(delta, 0.1);
+    time.current += dt;
     const a = animateCharacter(pose, p, {
-      dt: delta,
-      time: t,
+      dt,
+      time: time.current,
       pitch: display ? 0 : p.pitch,
       paused: state.paused,
       display,
       victory: !display && match.ended && match.winner === index,
     });
+    const move =
+        THREE.MathUtils.clamp(a.speed / 5, 0, 1) *
+        (1 - a.air) *
+        (1 - a.celebrate),
+      walking = Math.max(0, 1 - Math.abs(a.speed - 2.8) / 2.8) * move;
+    rig.idle.setEffectiveWeight(1 - move);
+    rig.walk.setEffectiveWeight(walking);
+    rig.run.setEffectiveWeight(move - walking);
+    rig.run.timeScale = Math.max(0.7, a.speed / 6);
+    rig.mixer.update(dt);
     rig.root.position.set(
       display ? 0 : p.pos.x,
       display ? 0 : p.pos.y,
       display ? 0 : p.pos.z,
     );
-    rig.root.rotation.y = display ? 3.7 + Math.sin(t * 0.4) * 0.35 : p.yaw;
+    rig.root.rotation.y = display
+      ? 3.7 + Math.sin(time.current * 0.4) * 0.35
+      : p.yaw;
     rig.root.visible = display || a.death < 1;
     rig.shield.visible = !display && p.dead <= 0 && p.protection > 0;
-    const stride =
-      Math.sin(a.phase) * Math.min(0.72, a.speed * 0.1) * (1 - a.air);
-    rig.visual.position.y = -Math.sin((a.death * Math.PI) / 2) * 0.35;
     rig.visual.rotation.z = a.death * 1.35;
     rig.visual.scale.setScalar(1 - a.death * 0.55);
-    const hop = a.celebrate * Math.max(0, Math.sin(t * 7)) * 0.14;
-    rig.torso.position.y =
-      0.97 + a.breath + Math.abs(stride) * 0.025 - a.landing * 0.055 + hop;
-    rig.torso.rotation.set(
-      -a.forward * 0.018 + a.air * 0.09 + a.recoil * 0.05,
-      -a.strafe * 0.025,
-      -a.strafe * 0.025 + a.hurt * Math.sin(t * 35) * 0.08,
+    rig.visual.position.y =
+      -a.death * 0.35 +
+      a.celebrate * Math.max(0, Math.sin(time.current * 7)) * 0.1;
+    rig.spine.quaternion.multiply(
+      scratch.rotation.setFromEuler(
+        scratch.euler.set(a.recoil * 0.07 + a.hurt * 0.1, 0, -a.strafe * 0.02),
+      ),
     );
-    rig.head.rotation.set(
-      a.hurt * 0.13 - a.air * 0.04,
-      Math.sin(t * 0.7) * 0.035,
-      -a.strafe * 0.015,
-    );
-    rig.eyes.scale.y = a.hurt > 0.4 ? 0.65 : a.blink;
-    rig.brows.rotation.z = a.hurt * Math.sin(t * 10) * 0.12;
     for (let i = 0; i < 2; i++) {
-      const side = i ? 1 : -1,
-        leg = rig.legs[i];
-      leg.hip.rotation.x =
-        stride * side + a.air * (-0.25 + side * 0.18) - a.landing * 0.2;
-      leg.hip.rotation.z = -a.strafe * 0.035 + side * a.doubleJump * 0.22;
-      leg.knee.rotation.x =
-        Math.max(0, -stride * side) * 0.65 +
-        a.air * (0.35 + a.doubleJump * 0.7);
-      leg.hip.position.y = 0.66 + hop;
+      rig.legs[i].upper.quaternion.multiply(
+        scratch.rotation.setFromAxisAngle(
+          scratch.v.set(1, 0, 0),
+          a.air * (-0.3 + (i ? 1 : -1) * 0.13),
+        ),
+      );
+      rig.legs[i].lower.quaternion.multiply(
+        scratch.rotation.setFromAxisAngle(
+          scratch.v.set(1, 0, 0),
+          a.air * (0.5 + a.doubleJump * 0.65),
+        ),
+      );
     }
-    // Keep the muzzle stationary at the simulation socket. Recoil compresses the receiver behind it.
-    rig.weapon.position.set(0, WEAPON_SOCKET.height, -WEAPON_SOCKET.forward);
+    rig.head.quaternion.multiply(
+      scratch.rotation.setFromEuler(
+        scratch.euler.set(
+          a.hurt * 0.12,
+          0,
+          Math.sin(time.current * 30) * a.hurt * 0.08,
+        ),
+      ),
+    );
     rig.weapon.rotation.set(
-      a.pitch - a.reload * 0.32 + a.celebrate * 0.7,
+      a.pitch - a.reload * 0.3 + a.celebrate * 0.65,
       0,
       a.reload * 0.2,
     );
-    rig.weapon.scale.z = 1 - a.recoil * 0.13;
-    rig.weapon.updateMatrix();
-    rig.torso.updateMatrix();
+    rig.weapon.scale.z = 1 - a.recoil * 0.1;
+    rig.root.updateMatrixWorld(true);
+    const rotateBone = (
+      bone: THREE.Bone,
+      child: THREE.Bone,
+      target: THREE.Vector3,
+    ) => {
+      bone.getWorldPosition(scratch.v);
+      child.getWorldPosition(scratch.u);
+      scratch.u.sub(scratch.v).normalize();
+      scratch.v.negate().add(target).normalize();
+      scratch.q.setFromUnitVectors(scratch.u, scratch.v);
+      bone.getWorldQuaternion(scratch.world);
+      bone.parent!.getWorldQuaternion(scratch.parent);
+      bone.quaternion.copy(
+        scratch.parent.invert().multiply(scratch.q).multiply(scratch.world),
+      );
+      bone.updateWorldMatrix(false, true);
+    };
     for (const arm of rig.arms) {
-      const { shoulder, hand, elbow, direction, bend, axis, segment } = scratch;
-      shoulder.set(arm.side * 0.4, 0.14, 0).applyMatrix4(rig.torso.matrix);
-      if (arm.side === 1) hand.set(0.11, -0.21, 0.55);
-      else
-        hand.set(
-          -0.13 + a.reload * 0.13,
-          -0.025 + a.reload * 0.28,
-          0.3 + a.reload * 0.15,
-        );
-      hand.applyMatrix4(rig.weapon.matrix);
-      if (arm.side === -1 && a.celebrate > 0.01)
-        hand.lerp(
-          segment.set(-0.65, 1.95 + Math.sin(t * 8) * 0.08, 0),
-          a.celebrate,
-        );
-      direction.copy(hand).sub(shoulder);
-      const distance = direction.length();
+      const { goal, elbow, direction, bend } = scratch;
+      goal.set(
+        arm.side === 1 ? 0.1 : -0.12,
+        arm.side === 1 ? -0.17 : -0.04 + a.reload * 0.28,
+        arm.side === 1 ? 0.65 : 0.5 + a.reload * 0.1,
+      );
+      rig.weapon.localToWorld(goal);
+      if (arm.side === -1 && a.celebrate > 0) {
+        scratch.v.set(-0.6, 1.95 + Math.sin(time.current * 8) * 0.07, 0);
+        rig.root.localToWorld(scratch.v);
+        goal.lerp(scratch.v, a.celebrate);
+      }
+      arm.upper.getWorldPosition(scratch.a);
+      arm.lower.getWorldPosition(scratch.b);
+      arm.hand.getWorldPosition(scratch.c);
+      const upperLength = scratch.a.distanceTo(scratch.b),
+        lowerLength = scratch.b.distanceTo(scratch.c);
+      direction.copy(goal).sub(scratch.a);
+      const distance = THREE.MathUtils.clamp(
+        direction.length(),
+        Math.abs(upperLength - lowerLength) + 0.001,
+        upperLength + lowerLength - 0.001,
+      );
       direction.normalize();
-      bend.set(arm.side * 0.7, -0.45, 0.8);
+      bend.set(arm.side * 0.7, -0.5, 0.7).applyQuaternion(rig.root.quaternion);
       bend.addScaledVector(direction, -bend.dot(direction)).normalize();
+      const along =
+        (upperLength ** 2 - lowerLength ** 2 + distance ** 2) / (2 * distance);
       elbow
-        .copy(shoulder)
-        .addScaledVector(direction, distance * 0.5)
+        .copy(scratch.a)
+        .addScaledVector(direction, along)
         .addScaledVector(
           bend,
-          Math.sqrt(Math.max(0.015, 0.44 ** 2 - (distance * 0.5) ** 2)),
+          Math.sqrt(Math.max(0, upperLength ** 2 - along ** 2)),
         );
-      arm.upper.position.copy(shoulder);
-      segment.copy(elbow).sub(shoulder);
-      arm.upper.scale.y = segment.length();
-      arm.upper.quaternion.setFromUnitVectors(axis, segment.normalize());
-      arm.lower.position.copy(elbow);
-      segment.copy(hand).sub(elbow);
-      arm.lower.scale.y = segment.length();
-      arm.lower.quaternion.setFromUnitVectors(axis, segment.normalize());
-      arm.hand.position.copy(hand);
-      arm.hand.rotation.copy(rig.weapon.rotation);
+      rotateBone(arm.upper, arm.lower, elbow);
+      rotateBone(arm.lower, arm.hand, goal);
+      rig.weapon.getWorldQuaternion(scratch.world);
+      scratch.rotation.setFromAxisAngle(scratch.v.set(1, 0, 0), -Math.PI / 2);
+      scratch.world.multiply(scratch.rotation);
+      arm.hand.parent!.getWorldQuaternion(scratch.parent);
+      arm.hand.quaternion.copy(scratch.parent.invert().multiply(scratch.world));
+      arm.hand.updateWorldMatrix(false, true);
     }
-    // Optional development inspection socket; no gameplay state is written by this rig.
     rig.root.userData.animation = a;
   });
   return <primitive object={rig.root} dispose={null} />;
