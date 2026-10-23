@@ -28,3 +28,13 @@ export const COVER = [
   { x: -11, z: 0, w: 2, d: 5, h: 1, color: "#ff7e92" },
   { x: 11, z: 0, w: 2, d: 5, h: 1, color: "#ff7e92" },
 ];
+
+/** Local-space muzzle socket; shared by simulation and replaceable character assets. */
+export const WEAPON_SOCKET = { height: 1.3, forward: 0.8 } as const;
+export function projectileOrigin(position: Vec, yaw: number): Vec {
+  return {
+    x: position.x - Math.sin(yaw) * WEAPON_SOCKET.forward,
+    y: position.y + WEAPON_SOCKET.height,
+    z: position.z - Math.cos(yaw) * WEAPON_SOCKET.forward,
+  };
+}

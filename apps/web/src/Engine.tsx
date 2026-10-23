@@ -153,6 +153,6 @@ export function Engine() {
     camera.position.lerp(desired.current, 1 - Math.exp(-15 * delta));
     look.current.copy(target).addScaledVector(forward, 50);
     camera.lookAt(look.current);
-  });
+  }, -1); // Simulate before character rigs/effects sample this frame's state.
   return null;
 }

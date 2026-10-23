@@ -1,4 +1,4 @@
-import { COVER, RULES, type Vec } from "@wbw/shared";
+import { COVER, RULES, projectileOrigin, type Vec } from "@wbw/shared";
 export type Fighter = {
   pos: Vec;
   vel: Vec;
@@ -12,6 +12,7 @@ export type Fighter = {
   dead: number;
   protection: number;
   yaw: number;
+  pitch: number;
   shots: number;
   hits: number;
   damage: number;
@@ -47,6 +48,7 @@ export const fighter = (i: number): Fighter => ({
   dead: 0,
   protection: 2,
   yaw: i ? Math.PI : 0,
+  pitch: 0,
   shots: 0,
   hits: 0,
   damage: 0,
@@ -66,6 +68,7 @@ export function solid(p: Vec, r = 0) {
 }
 export function move(p: Fighter, input: Input, dt: number) {
   p.yaw = input.yaw;
+  p.pitch = input.pitch;
   const length = Math.hypot(input.x, input.z) || 1;
   const speed = RULES.speed * (input.sprint ? RULES.sprint : 1);
   const s = Math.sin(input.yaw),
@@ -172,11 +175,7 @@ export class Match {
         this.shots.push({
           id: this.id++,
           owner: i,
-          pos: {
-            x: p.pos.x - Math.sin(p.yaw) * 0.8,
-            y: p.pos.y + 1.3,
-            z: p.pos.z - Math.cos(p.yaw) * 0.8,
-          },
+          pos: projectileOrigin(p.pos, p.yaw),
           vel: {
             x: -Math.sin(p.yaw) * cp * RULES.projectileSpeed,
             y: Math.sin(input.pitch) * RULES.projectileSpeed,
